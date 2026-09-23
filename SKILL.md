@@ -1,7 +1,7 @@
 ---
 name: hive-ddl-to-mysql-skill
-description: 把 Hive / MaxCompute(ODPS) 的 CREATE TABLE 语句转成 MySQL 建表语句，并可按要求直接连 MySQL 执行建表。当用户说「把这个 hive 建表语句转成 mysql 的」「这张 hive 表在 mysql 里怎么建」「hive 表结构同步到 mysql」「按这个 DDL 在 mysql 建张表」「帮我在 mysql 里建这张表」「Hive DDL 转 MySQL DDL」时使用。自动做类型映射（string→varchar/text、decimal 保精度、boolean→tinyint(1)、array/map/struct→json）、保留每列中文 COMMENT、反引号包裹保留字、把 Hive 分区字段降级成普通列。默认【只生成语句不动数据库】，只有用户明确要求建表时才加 --execute 连库执行；连接信息从 config.yml 的 mysql 段读取。同时产出字段核对报告，把按字段名猜出来的 varchar 长度单列出来供复核。不负责在 Hive 上跑 SQL 导出数据（那是 hive-sql-to-csv），不负责查字段字典补中文注释生成 ODPS 建表语句（那是 dataworks-sql-table 的 ddl 子命令），也不负责追字段血缘（那是 sql-field-lineage）。
-version: 1.0.0
+description: 把 Hive / MaxCompute(ODPS) 的 CREATE TABLE 语句转成 MySQL 建表语句，并可按要求直接连 MySQL 执行建表。当用户说「把这个 hive 建表语句转成 mysql 的」「这张 hive 表在 mysql 里怎么建」「hive 表结构同步到 mysql」「按这个 DDL 在 mysql 建张表」「帮我在 mysql 里建这张表」「Hive DDL 转 MySQL DDL」时使用。自动做类型映射（string→varchar/text、decimal 保精度、boolean→tinyint(1)、array/map/struct→json）、保留每列中文 COMMENT、反引号包裹保留字、把 Hive 分区字段降级成普通列。默认【只生成语句不动数据库】，只有用户明确要求建表时才加 --execute 连库执行；连接信息从 config.yml 的 mysql 段读取。用户说「安装并配置 hive-ddl-to-mysql-skill」「先把这个 skill 装上」「配置 mysql 连接 / 初始化 config.yml / 第一次使用前设置 mysql 账号密码 / 配一下 mysql 的 host 和密码」时也使用：用 install.sh 一键安装到 trae-cn 和/或 claude（自动识别路径、--non-interactive 输出 JSON），跑 check_config.py 拿到 missing/next_actions，需要 --execute 时当场问齐 host/username/password 并写入 config.yml（chmod 600，不入库），配置引导在同一轮对话内完成，不能只丢一句"首次使用前请自行配置"就收尾；只生成语句不需要配置、装完即可用。同时产出字段核对报告，把按字段名猜出来的 varchar 长度单列出来供复核。不负责在 Hive 上跑 SQL 导出数据（那是 hive-sql-to-csv），不负责查字段字典补中文注释生成 ODPS 建表语句（那是 dataworks-sql-table 的 ddl 子命令），也不负责追字段血缘（那是 sql-field-lineage）。
+version: 1.1.0
 ---
 
 # hive-ddl-to-mysql-skill
@@ -19,24 +19,183 @@ version: 1.0.0
 
 所以脚本把每个取舍都记进报告，并把启发式推断的部分**单列出来**，而不是混在结果里假装确定。
 
+## Agent 一键安装与配置引导（trae-cn / claude）
+
+当 Agent（Trae-CN / Claude）被要求"**安装本 skill**"或"**安装并配置好 MySQL 连接**"时，
+按下面 7 步走。整个流程**对 Agent 是自洽的**——不需要再去翻文档，也不需要用户手把手指导。
+
+> **硬性规则（最重要）**
+>
+> 1. **安装永远成功、配置按需进行**：本技能只生成建表语句时**不需要任何配置**。
+>    用户只要求"安装"时，装完即可用，**不要**强迫用户提供 MySQL 凭据。
+> 2. 用户明确要求"**安装并配置**"，或接下来要用 `--execute` 连库建表时，配置引导必须
+>    **在同一轮对话内完成**：跑 `check_config.py`、按 `missing` 当场问齐缺失字段、
+>    写好 `config.yml`（chmod 600）、复验到 `ready=true`。**禁止**用"首次使用前请参考
+>    config.example.yml 自行配置"这类话收尾——那等于没做完。
+> 3. 用户给不出凭据时可以停下等他提供，但要明确告诉他"在给出 host/账号/密码前无法
+>    `--execute`，但只转 DDL 不受影响"，而不是默默结束。
+> 4. **通用安装器兜底**：Trae/Claude 的通用 skill 安装器可能只复制文件、不执行本仓库的
+>    `install.sh`（表现为安装报告里没有 `---BEGIN CONFIG JSON---` 段）。这种情况下，
+>    Agent 在安装报告后**必须自己从第 2 步接着做**：定位安装目录、跑 `check_config.py`、
+>    问用户、写配置。
+> 5. Agent 自己执行 Shell 时**不要**跑 `setup_config.py` 向导（子进程没有 TTY，会直接
+>    退出码 4）。Agent 应在对话里问用户、用 Write 写文件；向导只给真人终端用。
+
+### 1. 一键安装到目标环境
+
+`<REPO>` 是仓库克隆/解压后的根目录（含 `install.sh`、`SKILL.md`、`scripts/`）。
+
+```bash
+sh <REPO>/install.sh                       # 自动检测 trae-cn / claude，装到 global；都检测到就都装
+# 或显式指定其一：
+sh <REPO>/install.sh --trae                 # 只装 Trae-CN（global）
+sh <REPO>/install.sh --claude               # 只装 Claude Code（global）
+sh <REPO>/install.sh --project              # 装到当前项目（<项目>/.trae/skills 与 <项目>/.claude/skills）
+```
+
+**Agent 推荐**加 `--non-interactive`（等价于 `--yes` / `--json`）：装完不打印人类步骤提示，
+改为在末尾输出一段 JSON（用 `---BEGIN CONFIG JSON---` / `---END CONFIG JSON---` 包起来），
+Agent 按这两个标记截取即可。
+
+```bash
+sh <REPO>/install.sh --non-interactive      # Agent 模式：装完输出 JSON
+```
+
+> 注意：`install.sh` 在**真人终端**（交互式 TTY）里跑、且配置缺失时，会自动进入
+> `scripts/setup_config.py` 向导逐项提问；Agent 经 Shell 调起时 stdin 不是 TTY，不会挂起，
+> 会退化为输出动作清单 / JSON——此时配置由 Agent 在对话里完成（第 3 步）。
+
+安装位置（自动检测到的每个 agent 各装一份）：
+
+- Trae-CN：`~/.trae-cn/skills/hive-ddl-to-mysql-skill/`（项目级为 `<项目>/.trae/skills/`）
+- Claude Code：`~/.claude/skills/hive-ddl-to-mysql-skill/`（项目级为 `<项目>/.claude/skills/`）
+
+安装时**不**会带 `config.yml`、`docs/`（前者含真实凭据、后者是本地产物）；重装/升级时
+目标目录里已有的 `config.yml`、`docs/` 会自动备份、装完原样移回，不丢失。
+
+### 2. 跑 check_config.py 拿到机器可读状态
+
+装完之后（或在已装好的 skill 目录上单独跑一次）调用 check_config.py，**默认输出就是 JSON**：
+
+```bash
+SK="<上一步装到的目录，如 ~/.trae-cn/skills/hive-ddl-to-mysql-skill>"
+python3 "$SK/scripts/check_config.py" --skill-dir "$SK"           # 默认 JSON
+# 也可显式:
+python3 "$SK/scripts/check_config.py" --skill-dir "$SK" --json
+```
+
+脚本会**按安装路径自动识别 agent**（JSON 里的 `agent` 字段：`trae` / `claude` / `unknown`），
+输出形如：
+
+```json
+{
+  "ready": false,
+  "agent": "trae",
+  "skill_dir": "/Users/.../.trae-cn/skills/hive-ddl-to-mysql-skill",
+  "config_path": null,
+  "config_exists": false,
+  "password_from_env": false,
+  "missing": [
+    {"field": "host", "reason": "config.yml 不存在"},
+    {"field": "username", "reason": "config.yml 不存在"},
+    {"field": "password", "reason": "config.yml 不存在且未设 MYSQL_PASSWORD 环境变量"}
+  ],
+  "warnings": [],
+  "next_actions": [
+    {"step": "copy_template", "cmd": "cp <SK>/config.example.yml <SK>/config.yml", "from": "...", "to": "..."},
+    {"step": "ask_user", "fields": ["host","password","username"], "hint": "向用户询问 MySQL 连接信息；不要猜，不要用占位值。密码写入 config.yml 的 mysql.password（本地文件，写完 chmod 600，不入库）；trae-cn / claude 两个 agent 通用……"},
+    {"step": "write_config", "path": "<SK>/config.yml", "note": "按 config.example.yml 的 mysql: 段结构填入……"},
+    {"step": "chmod", "cmd": "chmod 600 <SK>/config.yml", "path": "...", "mode": "600"},
+    {"step": "verify", "cmd": "python3 <SK>/scripts/check_config.py --skill-dir <SK>", "expect": "ready=true 即可 --execute……"}
+  ]
+}
+```
+
+退出码：`0` = 就绪；`2` = 缺 config.yml；`3` = 配置不完整或缺依赖。
+
+- 用户只要转 DDL → **本步可整体跳过**，直接到第 6 步汇报安装完成。
+- `ready=true` → **跳到第 6 步**，不用再做任何配置。
+- `ready=false` 且用户要用 `--execute` → 按 `next_actions` 顺序往下走。
+
+### 3. 按 next_actions 执行；缺什么就问用户要什么
+
+- `step: install_dep` → `pip install pyyaml`（仅当 PyYAML 缺失时出现）。
+- `step: copy_template` → 用 Shell 跑 `cmd` 里的 `cp` 命令把模板复制成 `config.yml`。
+- `step: ask_user` → **必须**问用户要 `fields` 列出的字段，**不要猜、不要用占位值 127.0.0.1**。
+  - `host`：真实 MySQL 地址（模板里的 `127.0.0.1` 是占位，原样保留会被判为未配置）。
+  - `port`：端口，默认 3306（用户没特殊说就用这个）。
+  - `username`：MySQL 账号。
+  - `password`：MySQL 密码——**两个 agent 统一**写本地 `config.yml` 的 `mysql.password`
+    （权限 600、不入库），不回显、不上传。`agent=claude` 时也可告知用户备选：
+    配 `MYSQL_PASSWORD` 到 `~/.claude/settings.json` 的 `env` 段（改完重开会话）；
+    `agent=trae` 时没有等价 settings 机制，直接写 config.yml。
+  - `database`：目标库名，可空（告警不阻塞，用时 `--db` 覆盖）。
+- `step: write_config` → 用 Write/Edit 工具把 `path` 指向的 `config.yml` 改好。
+- `step: chmod` → 用 Shell 跑 `cmd` 锁 600。
+- `step: verify` → 用 Shell 跑 `cmd` 再检测一次；ready=true 即配置完成，仍 false 把
+  `missing` 贴回给用户继续补。
+
+### 4. 写 config.yml（用 Write/Edit 工具，结构如下）
+
+```yaml
+mysql:
+  host: "<用户给的真实 MySQL 地址>"
+  port: 3306
+  username: "<MySQL 账号>"
+  password: "<MySQL 密码>"
+  database: "<目标库名，可留空>"
+  charset: "utf8mb4"
+```
+
+### 5. 锁权限 + 复跑 check_config 验证
+
+```bash
+chmod 600 "$SK/config.yml"
+python3 "$SK/scripts/check_config.py" --skill-dir "$SK" --json
+```
+
+- `ready=true` → 配置完成。
+- `ready=false` → 把新的 `missing` 项贴回给用户继续补齐，回到第 3 步。
+- 两个 agent 各装了一份时，配置只引导其中一份（JSON 对应的那份）；另一份直接
+  `cp` 同一份 `config.yml` 过去并 `chmod 600` 即可。
+
+### 6. 汇报
+
+向用户精简汇报：装到哪个目录（trae-cn / claude / 项目级，可能两份）、是否就绪、缺啥。
+**不要**在对话里回显密码或完整凭据——只说"已写入 config.yml（权限 600）"。
+用户只要转 DDL 时，明确告诉他"装完即可用，无需配置；以后要 --execute 再跑 check_config.py"。
+
+### 7. 接下来
+
+skill 就绪后，按下面的"前置：连接配置"和"怎么做"两节正常使用即可。
+
+---
+
 ## 前置：什么时候需要连接配置
 
 **只生成语句不需要账号密码**——这是默认路径，直接就能跑。
 生成语句时只会去 `config.yml` 取一个 `mysql.database` 当目标库名（见下），取不到就生成裸表名。
 
-加 `--execute` 真的建表时才需要完整连接信息。它分两处，**密码不落盘**：
+加 `--execute` 真的建表时才需要完整连接信息，trae-cn / claude 两个 agent 适配如下：
 
-- **密码**：环境变量 `MYSQL_PASSWORD`，配在 `~/.claude/settings.json` 的 `env` 段。
+- **主路径（两个 agent 通用）**：连接信息（含密码）写在本技能目录的 `config.yml` 的
+  `mysql:` 段，写完 `chmod 600`、不入库。首次由上面的「Agent 一键安装与配置引导」
+  问齐写好；`config.example.yml` 是模板。
+- **密码的可选替代**：环境变量 `MYSQL_PASSWORD`。Claude Code 可配在
+  `~/.claude/settings.json` 的 `env` 段（改完要重开会话才生效）；Trae-CN 没有等价的
+  settings 机制，直接写 `config.yml` 即可。
 - **其余非敏感项**（`host / port / username / database / charset`）：`config.yml` 的
   `mysql:` 段。查找顺序：`--config` 指定的路径 → 环境变量 `MYSQL_CONFIG` →
-  **本仓库根**下的 `config.yml` → `~/.mysql/config.yml`。
+  **本技能目录**下的 `config.yml` → `~/.mysql/config.yml`。
 
 CLI 参数（`--host/--user/--password/...`）和环境变量（`MYSQL_HOST/MYSQL_USER/MYSQL_PASSWORD/...`）
 可覆盖任意字段，优先级 **CLI > 环境变量 > config.yml**。
 
-脚本报「缺少连接参数」时，**不要**去猜 host / 账号密码，如实告诉用户，并按报错项分别提示：
-缺密码 → 检查 `~/.claude/settings.json` 的 `env.MYSQL_PASSWORD`（改完要重开会话才生效），
-缺其它字段 → 检查本技能目录下的 `config.yml`。
+脚本报「缺少连接参数」时，**不要**去猜 host / 账号密码，如实告诉用户，先跑
+`python3 "$SK/scripts/check_config.py" --skill-dir "$SK"`（默认 JSON）看 `missing`，
+按报错项分别提示：缺密码 → 检查本技能目录下 `config.yml` 的 `mysql.password`
+（Claude 下也可检查 `MYSQL_PASSWORD` 环境变量，改完要重开会话），
+缺其它字段 → 同样检查该 `config.yml`。
 
 ### 目标库名不沿用 Hive 库名
 
