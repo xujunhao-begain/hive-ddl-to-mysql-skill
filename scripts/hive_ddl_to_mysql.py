@@ -907,7 +907,7 @@ def main(argv=None):
     ex.add_argument("--database")
 
     out = p.add_argument_group("输出")
-    out.add_argument("--out-dir", help="产物目录，默认 my_skills/docs/hive-ddl-to-mysql/")
+    out.add_argument("--out-dir", help="产物目录，默认 docs/hive-ddl-to-mysql/")
     out.add_argument("--no-save", action="store_true", help="只打到 stdout，不落盘")
 
     args = p.parse_args(argv)
