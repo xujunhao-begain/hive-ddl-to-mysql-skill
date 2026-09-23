@@ -1,0 +1,14 @@
+# ---- 凭证：不入库 ----
+config.yml
+
+# ---- 配置模板可以提交 ----
+!config.example.yml
+
+# ---- 本地产物 ----
+docs/
+
+# ---- 杂项 ----
+__pycache__/
+*.py[cod]
+.DS_Store
+*.bak

@@ -1,0 +1,7 @@
+mysql:
+  host: "127.0.0.1"
+  port: 3306
+  username: "root"
+  password: ""           # 密码走环境变量 MYSQL_PASSWORD，不放这里
+  database: "target_db"
+  charset: "utf8mb4"
